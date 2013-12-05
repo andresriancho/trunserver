@@ -1,18 +1,21 @@
+import sys
+import os
+import re
+
+from optparse import make_option
+
 from django.core.management.base import BaseCommand, CommandError
 from django.contrib.staticfiles.handlers import StaticFilesHandler
 from django.core.servers.basehttp import get_internal_wsgi_application
-#from django.utils import autoreload
-from trunserv import autoreload
 
 from twisted.application import internet, service, app
 from twisted.web import server, resource, wsgi
 from twisted.python import threadpool, log
 from twisted.internet import reactor, ssl
+from twisted.internet.error import CannotListenError
 
-from optparse import make_option
-import sys
-import os
-import re
+#from django.utils import autoreload
+from trunserv import autoreload
 
 
 naiveip_re = re.compile(r"""^(?:
@@ -138,7 +141,7 @@ class Command(BaseCommand):
 
             stop = service.IService(application).stopService
             reactor.addSystemEventTrigger('before', 'shutdown', stop)
-
+            
             reactor.run()
 
         if use_reloader:
