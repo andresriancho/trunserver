@@ -5,9 +5,9 @@ from django.core.servers.basehttp import get_internal_wsgi_application
 from trunserv import autoreload
 
 from twisted.application import internet, service, app
-from twisted.web import server, resource, wsgi, static
+from twisted.web import server, resource, wsgi
 from twisted.python import threadpool, log
-from twisted.internet import reactor
+from twisted.internet import reactor, ssl
 
 from optparse import make_option
 import sys
@@ -48,15 +48,23 @@ def wsgi_resource():
 class Command(BaseCommand):
     option_list = BaseCommand.option_list + (
         make_option('--noreload', action='store_false', dest='use_reloader',
-            default=True, help='Do NOT use the auto-reloader.'),
+                    default=True, help='Do NOT use the auto-reloader.'),
+        make_option('--ssl-priv-key', action='store', dest='priv_key_file',
+                    default=None, help='Private SSL key file'),
+        make_option('--ssl-cert', action='store', dest='cert_file',
+                    default=None, help='SSL certificate file'),
     )
     help = "Starts a Twisted Web server for development."
-    args = '[optional port number, or ipaddr:port]'
+    args = '[optional port number, or ipaddr:port] '\
+           '[--ssl-priv-key=KEY --ssl-cert=CERT]'
 
     # Validation is called explicitly each time the server is reloaded.
     requires_model_validation = False
 
     def handle(self, addrport='', *args, **options):
+        #
+        #    Handle bind address configuration
+        #
         if not addrport:
             self.addr = ''
             self.port = DEFAULT_PORT
@@ -71,6 +79,34 @@ class Command(BaseCommand):
 
         if not self.addr:
             self.addr = '127.0.0.1'
+
+        #
+        #    Handle SSL configuration
+        #
+        priv_key_file = options.get('priv_key_file', '')
+        cert_file = options.get('cert_file', '')
+        self.use_ssl = False
+        
+        if priv_key_file: 
+            if not os.path.exists(priv_key_file):
+                error = 'The SSL private key file "%s" does not exist'
+                raise CommandError(error % priv_key_file)
+            else:
+                self.priv_key_file = priv_key_file
+                
+        if cert_file: 
+            if not os.path.exists(cert_file):
+                error = 'The SSL certificate file "%s" does not exist'
+                raise CommandError(error % cert_file)
+            else:
+                self.cert_file = cert_file
+                
+        if (cert_file and not priv_key_file) or (priv_key_file and not cert_file):
+            error = 'You need to specify both --ssl-priv-key and --ssl-cert'
+            raise CommandError(error)
+        
+        if cert_file and priv_key_file:
+            self.use_ssl = True
 
         self.run(*args, **options)
 
@@ -87,14 +123,21 @@ class Command(BaseCommand):
             root = Root(wsgi_root)
 
             main_site = server.Site(root)
-            internet.TCPServer(int(self.port), main_site
-                    ).setServiceParent(application)
+            
+            if self.use_ssl:
+                context = ssl.DefaultOpenSSLContextFactory(self.priv_key_file,
+                                                           self.cert_file)
+                tcp_server = internet.SSLServer(int(self.port), main_site, context)
+            else:
+                tcp_server = internet.TCPServer(int(self.port), main_site)
+            
+            tcp_server.setServiceParent(application)
 
             service.IService(application).startService()
             app.startApplication(application, False)
 
-            reactor.addSystemEventTrigger('before', 'shutdown',
-                    service.IService(application).stopService)
+            stop = service.IService(application).stopService
+            reactor.addSystemEventTrigger('before', 'shutdown', stop)
 
             reactor.run()
 
